@@ -1,3 +1,4 @@
+import random
 import matplotlib
 import mne
 import numpy as np
@@ -6,6 +7,7 @@ import scipy.fft as fft
 from scipy import signal
 
 matplotlib.use('TkAgg')
+events_xs = [[72.5, 83, 93, 103.5, 116.5, 130, 141, 152, 165], [190, 201, 213.5, 225, 237, 251.5, 263.5]]
 
 
 # Вспомогательная функция - вычисление БПФ сигнала с частотой дискретизации fs
@@ -28,7 +30,7 @@ def FFT(x, fs, window=None):
 def spectrogram(x, fs, segments=20, min_hz=0, max_hz=40, window=None):
     step = len(x) // segments
     step //= 2
-    segments_with_overlap = segments * 2
+    segments_with_overlap = segments * 2 - 1
     res = []
     f, _ = FFT(x[0:2*step], fs)
     mx = max(np.argwhere(f <= max_hz).flatten())
@@ -43,6 +45,7 @@ def spectrogram(x, fs, segments=20, min_hz=0, max_hz=40, window=None):
 
 # Вспомогательная функция - вычисление энтропии сигнала
 def entropy(signal):
+    signal = [round(el, 2) for el in signal]
     n = len(signal)
     ans = 0
     values, counts = np.unique(np.array(signal), return_counts=True)
@@ -83,9 +86,9 @@ def area(ends, spectrum, freq):
     mn = min(np.argwhere(freq >= a).flatten())
     res = 0
     step = freq[1] - freq[0]
-    for x in range(mn, mx + 1):
-        res += spectrum[x]
-    return res * step
+    for x in range(mn + 1, mx + 1):
+        res += (spectrum[x] + spectrum[x-1])
+    return res * step / 2
 
 
 # Вспомогательная функция - подсчет мощностей ритмов
@@ -105,7 +108,8 @@ def power_rhythms(freq, spectrum):
 
 # Вычисление наиболее выраженного ритма
 def powerful_rhythm(freq, spectrum):
-    rhythms = ['Delta', 'Theta', 'Alpha', 'Beta', 'Gamma']
+    rhythms = [0, 1, 2, 3, 4]
+    # rhythms = ['0 - Delta', '1 - Theta', '2 - Alpha', '3 - Beta', '4 - Gamma']
     return rhythms[np.argmax(power_rhythms(freq, spectrum))]
 
 
@@ -114,11 +118,10 @@ def powerful_rhythm(freq, spectrum):
 def calc_total_entropy(x, fs, segments):
     step = len(x) // segments
     step //= 2
-    segments_with_overlap = segments * 2
+    segments_with_overlap = segments * 2 - 1
     res = []
     for i in range(segments_with_overlap):
-        tmp_x = x[i * step:(i + 2) * step]
-        res.append(entropy(tmp_x))
+        res.append(entropy(x[i*step:(i + 2)*step]))
     return res
 
 
@@ -127,7 +130,7 @@ def calc_total_entropy(x, fs, segments):
 def calc_area_of_rhythm(x, fs, segments, min_hz, max_hz):
     step = len(x) // segments
     step //= 2
-    segments_with_overlap = segments * 2
+    segments_with_overlap = segments * 2 - 1
     res = []
     for i in range(segments_with_overlap):
         tmp_x = x[i*step:(i+2)*step]
@@ -176,13 +179,14 @@ def all_info(x, fs, segments=20, min_hz=0, max_hz=40):
     total_argmax_amplitude = list(map(lambda el: argmax_amplitude(f, el), res))
     total_avg_amplitude = list(map(avg_amplitude, res))
     total_expected_freq = list(map(lambda el: expected_freq(f, el), res))
+    total_area = list(map(lambda el: area((min_hz, max_hz), el, f), res))
 
-    freq, X = spectrogram(x, fs, segments=segments, min_hz=0, max_hz=100)
+    freq, X = spectrogram(x, fs, segments=segments, min_hz=0, max_hz=50)
     total_powerful_rhythm = list(map(lambda el: powerful_rhythm(freq, el), X))
 
-    epochs = np.linspace(0, len(x)/fs, segments*2)
+    epochs = np.linspace(0, len(x)/fs, segments*2-1)
 
-    return epochs, f, total_entropy, total_powerful_rhythm, total_max_amplitude, total_argmax_amplitude, \
+    return epochs, f, total_entropy, total_area, total_powerful_rhythm, total_max_amplitude, total_argmax_amplitude, \
            total_argmax_amplitude, total_avg_amplitude, total_expected_freq
 
 
@@ -196,6 +200,7 @@ def draw_spectrogram(x, fs, segments=20, min_hz=0, max_hz=30, axis=plt, window='
                     aspect=7, vmin=0, vmax=vmax)
     mng = plt.get_current_fig_manager()
     mng.window.state('zoomed')
+    draw_annotation(axis, events_xs, vmin=min_hz, vmax=max_hz)
     if axis == plt:
         plt.xlabel('Time')
         plt.ylabel('Hz')
@@ -237,6 +242,8 @@ def draw_two_graphs(time, data_x, data_y, title, xlabel, ylabel):
     fig.suptitle(title)
     ax1.plot(time, data_x, color='#a44703')
     ax2.plot(time, data_y, color='#0647f4')
+    draw_annotation(ax1, events_xs, vmin=min(data_x), vmax=max(data_x))
+    draw_annotation(ax2, events_xs, vmin=min(data_y), vmax=max(data_y))
     ax1.set_xlabel(xlabel)
     ax1.set_ylabel(ylabel)
     ax2.set_xlabel(xlabel)
@@ -246,12 +253,25 @@ def draw_two_graphs(time, data_x, data_y, title, xlabel, ylabel):
     plt.show()
 
 
+# Вспомогательная функция - отобразить разными цветами события
+def draw_annotation(ax, events_xs, vmin=0, vmax=100, tmin=0, tmax=400):
+    n = len(events_xs)
+    colors = ['#ff103a', '#045Dff', '#B2B207', '#0436A2', '#CA0550', '#CEF977']
+    #colors = ["#" + ''.join([random.choice('0123456789ABCDEF') for j in range(6)])
+    #          for i in range(n)]
+    for i in range(n):
+        for x in events_xs[i]:
+            if tmin <= x <= tmax:
+                ax.plot([x, x], [vmin, vmax], '--', color=colors[i], alpha=0.9)
+
+
 # Отрисовка сигнала начиная с секунды start, продолжительностью duration
 def draw_signal(signal, fs, start, duration):
     time = np.linspace(0, len(signal)/fs, len(signal))
     a = int(start * fs)
     b = a + int(duration * fs)
     plt.title(f'Отрисовка сигнала длины {duration} сек. начиная с {start} сек.')
+    draw_annotation(plt, events_xs, min(signal[a:b + 1]), max(signal[a:b + 1]), start, start + duration)
     plt.plot(time[a:b+1], signal[a:b+1], color='#0647f4')
     plt.xlabel('Time')
     plt.ylabel('Amplitude (dB)')
@@ -268,6 +288,7 @@ def draw_two_signals(signal_x, signal_y, fs, start, duration):
     plt.title(f'Отрисовка сигнала длины {duration} сек. начиная с {start} сек.')
     plt.plot(time[a:b+1], signal_x[a:b+1], color='#0647f4')
     plt.plot(time[a:b+1], signal_y[a:b+1], color='#af0604')
+    draw_annotation(plt, events_xs, min(min(signal_x[a:b+1]), min(signal_y[a:b+1])), max(max(signal_x[a:b+1]), max(signal_y[a:b+1])), start, start+duration)
     plt.xlabel('Time')
     plt.ylabel('Amplitude (dB)')
     mng = plt.get_current_fig_manager()
@@ -278,14 +299,15 @@ def draw_two_signals(signal_x, signal_y, fs, start, duration):
 # Обработка данных спектрограммы для двух электродов,
 # вычисление спектральных характеристик во времени и их сравнение
 def compare_two_all_info(x, y, fs, segments=20, min_hz=0, max_hz=30):
-    epochs, f, total_entropy_x, total_powerful_rhythm_x, \
+    epochs, f, total_entropy_x, total_area_x, total_powerful_rhythm_x, \
     total_max_amplitude_x, total_argmax_amplitude_x, \
     total_argmax_amplitude_x, total_avg_amplitude_x, total_expected_freq_x = all_info(x, fs, segments, min_hz, max_hz)
-    _, _, total_entropy_y, total_powerful_rhythm_y, \
+    _, _, total_entropy_y, total_area_y, total_powerful_rhythm_y, \
     total_max_amplitude_y, total_argmax_amplitude_y, \
     total_argmax_amplitude_y, total_avg_amplitude_y, total_expected_freq_y = all_info(y, fs, segments, min_hz, max_hz)
 
     draw_two_graphs(epochs, total_powerful_rhythm_x, total_powerful_rhythm_y, 'Наиболее выраженные ритмы', 'Time', 'Rhythms')
+    draw_two_graphs(epochs, total_area_x, total_area_y, f'Мощность ритма от {min_hz} до {max_hz} Hz', 'Time', 'Amplitude (dB)')
     draw_two_graphs(epochs, total_expected_freq_x, total_expected_freq_y, 'Мат. ожидание частоты', 'Time', 'Frequency (Hz)')
     draw_two_graphs(epochs, total_max_amplitude_x, total_max_amplitude_y, 'Наибольшая амплитуда', 'Time', 'Amplitude (dB)')
     draw_two_graphs(epochs, total_avg_amplitude_x, total_avg_amplitude_y, 'Средняя амплитуда', 'Time', 'Amplitude (dB)')
@@ -403,23 +425,96 @@ def mne_analysis():
 # Точка старта программы
 def main():
     fs = 500
-    x = read_file('examples/raw1.txt')[11]
-    y = read_file('examples/raw1.txt')[4]
+    x = read_file('examples/raw3.txt')[0]
+    y = read_file('examples/raw3.txt')[1]
     t = np.linspace(0, len(x)/fs, len(x))
 
-    segments = 80
-    min_hz = 8
-    max_hz = 12
+    segment_length = 2
+    min_hz = 20
+    max_hz = 35
 
-    draw_two_signals(x, y, fs, 130, 20)
-
-    diff_two_spectrogram(x, y, fs, segments, min_hz, max_hz)
+    draw_signal(x, fs, 60, 20)
+    segments = len(x) // (segment_length*fs)
     compare_two_spectorgram(x, y, fs, segments, min_hz, max_hz)
     compare_two_all_info(x, y, fs, segments, min_hz, max_hz)
-    print(find_relative_burst(x, y, fs, segments, min_hz, max_hz, alpha=1.5))
-    print(find_relative_burst(y, x, fs, segments, min_hz, max_hz, alpha=1.5))
+    burst_x = find_burst_of_rhythm(x, fs, segments, min_hz, max_hz, alpha=1.5)
+    burst_y = find_burst_of_rhythm(y, fs, segments, min_hz, max_hz, alpha=1.5)
+    print(list(map(lambda el: index_to_seconds(el, len(x), segments, fs), burst_x)))
+    print(list(map(lambda el: index_to_seconds(el, len(x), segments, fs), burst_y)))
+
+
+# Вспомогательная функция - извлечем данные из библиотеки MNE и события - подача аудио сигнала
+def extract_data_from_mne(verbose=False):
+    sample_data_folder = mne.datasets.sample.data_path()
+    print(sample_data_folder)
+    sample_data_raw_file = (
+            sample_data_folder / "MEG" / "sample" / "sample_audvis_filt-0-40_raw.fif"
+    )
+    raw = mne.io.read_raw_fif(sample_data_raw_file)
+
+    # set up and fit the ICA
+    ica = mne.preprocessing.ICA(n_components=20, random_state=97, max_iter=800)
+    ica.fit(raw)
+
+    raw.load_data()
+    ica.apply(raw)
+
+    events = mne.find_events(raw, stim_channel="STI 014")
+    event_dict = {
+        "buttonpress": 32
+    }
+    mapping = {
+        32: "buttonpress"
+    }
+    events = np.array([el for el in events if el[2] in mapping.keys()])
+    if verbose:
+        fig = mne.viz.plot_events(
+            events, event_id=event_dict, sfreq=raw.info["sfreq"], first_samp=raw.first_samp
+            )
+    annot_from_events = mne.annotations_from_events(
+        events=events,
+        event_desc=mapping,
+        sfreq=raw.info["sfreq"],
+        orig_time=raw.info["meas_date"],
+    )
+    raw.set_annotations(annot_from_events)
+    if verbose:
+        raw.plot(start=5, duration=5, block=True)
+    return raw, events, event_dict
+
+
+def to_events_xs(events, event_dict, fs, shift=0):
+    event_ids = sorted(event_dict.values())
+    res = [[] for _ in range(len(event_ids))]
+    for event in events:
+        i = event_ids.index(event[2])
+        res[i].append((event[0]-shift)/fs)
+    return res
+
+
+def mne_main():
+    global events_xs
+    raw, events, event_dict = extract_data_from_mne()
+    fs = int(raw.info['sfreq'])
+    x = raw.get_data('EEG 010', units='uV')[0]
+    y = raw.get_data('EEG 011', units='uV')[0]
+    events_xs = to_events_xs(events, event_dict, raw.info['sfreq'], raw.first_samp)
+
+    segment_length = 2
+    min_hz = 15
+    max_hz = 30
+
+    draw_two_signals(x, y, fs, 10, 20)
+    segments = len(x) // (segment_length*fs)
+    compare_two_spectorgram(x, y, fs, segments, min_hz, max_hz)
+    compare_two_all_info(x, y, fs, segments, min_hz, max_hz)
+    burst_x = find_burst_of_rhythm(x, fs, segments, min_hz, max_hz, alpha=1.5)
+    burst_y = find_burst_of_rhythm(y, fs, segments, min_hz, max_hz, alpha=1.5)
+    print(list(map(lambda el: index_to_seconds(el, len(x), segments, fs), burst_x)))
+    print(list(map(lambda el: index_to_seconds(el, len(x), segments, fs), burst_y)))
 
 
 if __name__ == '__main__':
     # mne_analysis()
     main()
+    # mne_main()
